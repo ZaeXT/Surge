@@ -1,0 +1,201 @@
+name: Deploy to WebDAV
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  schedule:
+    - cron: '0 5 * * *'
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: smorimoto/tune-github-hosted-runner-network@v1
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: ".node-version"
+          cache: "pnpm"
+      - name: Grab Building Folder
+        id: ramdisk
+        run: |
+          echo "build_dir=previous-build-${{ github.run_id }}-${{ github.run_number }}" >> $GITHUB_OUTPUT
+      - name: Download Previous Build
+        uses: actions/checkout@v6
+        with:
+          repository: SukkaLab/ruleset.skk.moe
+          persist-credentials: false
+          filter: "tree:0"
+          fetch-tags: false
+          path: ${{ steps.ramdisk.outputs.build_dir }}
+      - name: Setup build folder
+        run: |
+          if [ ! -d ${{ steps.ramdisk.outputs.build_dir }}/.git ]; then
+            echo ".git not found"
+            exit 1
+          fi
+          rm -rf "${{ steps.ramdisk.outputs.build_dir }}/.git"
+
+          if [ ! -d ${{ steps.ramdisk.outputs.build_dir }}/List ]; then
+            echo "List not found"
+            exit 1
+          fi
+          echo "public directory is ready: ${{ steps.ramdisk.outputs.build_dir }}"
+      - name: Get current date
+        id: date
+        run: |
+          echo "date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "year=$(date +'%Y')" >> $GITHUB_OUTPUT
+          echo "month=$(date +'%m')" >> $GITHUB_OUTPUT
+          echo "day=$(date +'%d')" >> $GITHUB_OUTPUT
+          echo "hour=$(date +'%H')" >> $GITHUB_OUTPUT
+          echo "minute=$(date +'%M')" >> $GITHUB_OUTPUT
+          echo "second=$(date +'%S')" >> $GITHUB_OUTPUT
+      - name: Restore cache.db
+        uses: actions/cache/restore@v5
+        id: cache-db-restore
+        with:
+          path: |
+            .cache
+          key: ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:${{ steps.date.outputs.minute }}:${{ steps.date.outputs.second }}
+          restore-keys: |
+            ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:${{ steps.date.outputs.minute }}:
+            ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:
+            ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }}
+            ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-
+            ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-
+            ${{ runner.os }}-v3-
+      - run: pnpm install
+      - name: Install sing-box
+        run: |
+          SINGBOX_VER="1.13.11"
+          curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-arm64.tar.gz" -o /tmp/sing-box.tar.gz
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          sudo mv "/tmp/sing-box-${SINGBOX_VER}-linux-arm64/sing-box" /usr/local/bin/sing-box
+          chmod +x /usr/local/bin/sing-box
+          sing-box version
+      - run: pnpm run build
+        env:
+          PUBLIC_DIR: ${{ steps.ramdisk.outputs.build_dir }}
+      - name: Pre-deploy check
+        run: |
+          if [ ! -d ${{ steps.ramdisk.outputs.build_dir }} ]; then
+            echo "public directory not found"
+            exit 1
+          fi
+          if [ ! "$(ls -A ${{ steps.ramdisk.outputs.build_dir }})" ]; then
+            echo "public directory is empty"
+            exit 1
+          fi
+          if [ ! -f .BUILD_FINISHED ]; then
+            echo ".BUILD_FINISHED not found"
+            exit 1
+          fi
+          echo "public directory is ready: ${{ steps.ramdisk.outputs.build_dir }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
+          path: ${{ steps.ramdisk.outputs.build_dir }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 4
+          include-hidden-files: false
+      - name: Cache cache.db
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .cache
+          key: ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:${{ steps.date.outputs.minute }}:${{ steps.date.outputs.second }}
+
+  diff_deployment_on_pr:
+    if: github.ref != 'refs/heads/master'
+    needs:
+      - build
+    name: Diff output
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
+          path: public
+      - name: Diff
+        run: |
+          git clone --filter=tree:0 --no-tags https://github.com/SukkaLab/ruleset.skk.moe.git ./deploy-git >/dev/null 2>&1
+          cd ./deploy-git
+          git fetch origin master >/dev/null 2>&1
+          rm -rf ./*
+          cp -rf ../public/* ./
+          git --no-pager diff --minimal
+
+  deploy_to_webdav:
+    needs:
+      - build
+    name: Deploy to WebDAV
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
+          path: public
+      - name: Upload to WebDAV
+        run: |
+          set -e
+          WEBDAV_URL="${{ secrets.WEBDAV_URL }}"
+          WEBDAV_URL="${WEBDAV_URL%/}"
+          WEBDAV_PREFIX="${{ vars.WEBDAV_PREFIX || secrets.WEBDAV_PREFIX || 'ruleset' }}"
+          WEBDAV_PREFIX="${WEBDAV_PREFIX%/}"
+
+          cd public
+
+          # Create directories
+          while IFS= read -r dir; do
+            if [ "$dir" = "." ]; then
+              target_url="${WEBDAV_URL}/${WEBDAV_PREFIX}/"
+            else
+              target_url="${WEBDAV_URL}/${WEBDAV_PREFIX}/${dir#./}"
+            fi
+            echo "MKCOL $target_url"
+            curl -sSf -X MKCOL -u "${{ secrets.WEBDAV_USERNAME }}:${{ secrets.WEBDAV_PASSWORD }}" "$target_url" || true
+          done < <(find . -type d | sort)
+
+          # Upload files
+          while IFS= read -r file; do
+            rel="${file#./}"
+            target_url="${WEBDAV_URL}/${WEBDAV_PREFIX}/${rel}"
+            echo "PUT $target_url"
+            curl -sSf -T "$file" -u "${{ secrets.WEBDAV_USERNAME }}:${{ secrets.WEBDAV_PASSWORD }}" "$target_url"
+          done < <(find . -type f | sort)
+
+          echo "WebDAV upload complete"
+      - name: Purge old files not in current build
+        continue-on-error: true
+        run: |
+          echo "Not implemented: stale file cleanup"
+          echo "Consider using a WebDAV client with sync/delete capability if needed."
+
+  remove_artifacts:
+    needs:
+      - deploy_to_webdav
+    name: Remove Artifacts after Deployment
+    if: always()
+    runs-on: ubuntu-slim
+    steps:
+      - uses: geekyeggo/delete-artifact@v6
+        with:
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}

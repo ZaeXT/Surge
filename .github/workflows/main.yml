@@ -82,6 +82,14 @@ jobs:
             ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-
             ${{ runner.os }}-v3-
       - run: pnpm install
+      - name: Install sing-box
+        run: |
+          SINGBOX_VER="1.13.11"
+          curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-arm64.tar.gz" -o /tmp/sing-box.tar.gz
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          sudo mv "/tmp/sing-box-${SINGBOX_VER}-linux-arm64/sing-box" /usr/local/bin/sing-box
+          chmod +x /usr/local/bin/sing-box
+          sing-box version
       - run: pnpm run build
         env:
           PUBLIC_DIR: ${{ steps.ramdisk.outputs.build_dir }}

@@ -20,6 +20,7 @@ import { createWorker } from './lib/worker';
 
 import { buildPublic } from './build-public';
 import { buildCloudMounterRules } from './build-cloudmounter-rules';
+import { buildSingboxSrs } from './build-singbox-srs';
 
 import { printStats, printTraceResult, whyIsNodeRunning } from './trace';
 import type { TraceResult } from './trace';
@@ -115,6 +116,8 @@ const buildFinishedLock = path.join(ROOT_DIR, '.BUILD_FINISHED');
       await buildDeprecateFiles(),
       await buildPublic()
     );
+
+    await buildSingboxSrs();
 
     // write a file to demonstrate that the build is finished
     fs.writeFileSync(buildFinishedLock, 'BUILD_FINISHED\n');
