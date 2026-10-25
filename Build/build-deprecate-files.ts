@@ -1,6 +1,6 @@
 import { OUTPUT_CLASH_DIR, OUTPUT_SURGE_DIR, PUBLIC_DIR } from './constants/dir';
 import { compareAndWriteFile } from './lib/create-file';
-import { task } from './trace';
+import { SpanCategory, task } from './trace';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { globSync } from 'tinyglobby';
@@ -8,7 +8,8 @@ import { appendArrayInPlace } from 'foxts/append-array-in-place';
 
 const DEPRECATED_FILES = [
   ['non_ip/global_plus', 'This file has been merged with non_ip/global'],
-  ['domainset/reject_sukka', 'This file has been merged with domainset/reject']
+  ['domainset/reject_sukka', 'This file has been merged with domainset/reject'],
+  ['non_ip/apple_cdn', 'This file has been merged with domainset/apple_cdn']
 ];
 
 const REMOVED_FILES = [
@@ -28,13 +29,14 @@ const REMOVED_FOLDERS = [
   'Clash/Internal'
 ];
 
-export const buildDeprecateFiles = task(require.main === module, __filename)((span) => span.traceChildAsync('create deprecated files', async (childSpan) => {
+export const buildDeprecateFiles = task(require.main === module, __filename)((span) => span.traceChild('create deprecated files', SpanCategory.FsWrite).traceAsyncFn(async (childSpan) => {
   const promises: Array<Promise<unknown>> = globSync(REMOVED_FILES, { cwd: PUBLIC_DIR, absolute: true })
     .map(f => fsp.rm(f, { force: true, recursive: true }));
 
   appendArrayInPlace(promises, REMOVED_FOLDERS.map(folder => fsp.rm(path.join(PUBLIC_DIR, folder), { force: true, recursive: true })));
 
-  for (const [filePath, description] of DEPRECATED_FILES) {
+  for (let i = 0, len = DEPRECATED_FILES.length; i < len; i++) {
+    const [filePath, description] = DEPRECATED_FILES[i];
     const content = [
       '#########################################',
       '# Sukka\'s Ruleset - Deprecated',

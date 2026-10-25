@@ -2,7 +2,7 @@ import picocolors from 'picocolors';
 import { parse } from 'tldts-experimental';
 import { appendArrayInPlaceCurried } from 'foxts/append-array-in-place';
 
-import { workerJob } from '../trace';
+import { SpanCategory, workerJob } from '../trace';
 import type { RawSpan, WorkerJobResult } from '../trace';
 import type { TldTsParsed } from './normalize-domain';
 
@@ -14,6 +14,7 @@ import { processHostsWithPreload } from './parse-filter/hosts';
 import { processDomainListsWithPreload } from './parse-filter/domainlists';
 
 import process from 'node:process';
+import { Counter } from 'foxts/counter';
 
 export function getPhishingDomains(rawSpan?: RawSpan, isDebug = false): Promise<WorkerJobResult<string[]>> {
   return workerJob(rawSpan, async (childSpan) => {
@@ -24,13 +25,13 @@ export function getPhishingDomains(rawSpan?: RawSpan, isDebug = false): Promise<
 
     const domainGroups = await Promise.all(downloads.map(task => task(childSpan)));
 
-    return childSpan.traceChildSync<string[]>('calculate and handling mass phishing domains', () => {
+    return childSpan.traceChild('calculate and handling mass phishing domains', SpanCategory.Compute).traceSyncFn<string[]>(() => {
       const domainArr: string[] = [];
 
       domainGroups.forEach(appendArrayInPlaceCurried(domainArr));
 
-      const domainCountMap = new Map<string, number>();
-      const domainScoreMap: Record<string, number> = Object.create(null) as Record<string, number>;
+      const domainCountMap = new Counter();
+      const domainScoreMap = new Counter();
 
       let line: string;
       let tld: string | null;
@@ -61,18 +62,17 @@ export function getPhishingDomains(rawSpan?: RawSpan, isDebug = false): Promise<
           continue;
         }
 
-        domainCountMap.set(
-          apexDomain,
-          domainCountMap.has(apexDomain)
-            ? domainCountMap.get(apexDomain)! + 1
-            : 1
-        );
+        subdomain = parsed.subdomain;
 
-        let score = 0;
+        if (subdomain === 'www') {
+          domainArr[i] = '.' + apexDomain;
+        }
 
-        if (apexDomain in domainScoreMap) {
-          score = domainScoreMap[apexDomain];
-        } else {
+        domainCountMap.incr(apexDomain);
+
+        if (!domainScoreMap.has(apexDomain)) {
+          let score = 0;
+
           if (BLACK_TLD.has(tld)) {
             score += 3;
           } else if (tld.length > 4) {
@@ -83,19 +83,17 @@ export function getPhishingDomains(rawSpan?: RawSpan, isDebug = false): Promise<
           if (apexDomain.length >= 18) {
             score += 0.5;
           }
-        }
 
-        subdomain = parsed.subdomain;
+          domainScoreMap.incr(apexDomain, score);
+        }
 
         if (subdomain) {
-          score += calcDomainAbuseScore(subdomain, line);
+          domainScoreMap.incr(subdomain, calcDomainAbuseScore(subdomain, line));
         }
-
-        domainScoreMap[apexDomain] = score;
       }
 
       domainCountMap.forEach((count, apexDomain) => {
-        const score = domainScoreMap[apexDomain];
+        const score = domainScoreMap.get(apexDomain);
         if (
           (score >= 24)
           || (score >= 16 && count >= 7)
@@ -110,9 +108,8 @@ export function getPhishingDomains(rawSpan?: RawSpan, isDebug = false): Promise<
 
       if (isDebug) {
         console.log({
-          v: 1,
-          score: domainScoreMap['com-ticketry.world'],
-          count: domainCountMap.get('com-ticketry.world'),
+          score: domainScoreMap.get('4556.de'),
+          count: domainCountMap.get('4556.de'),
           domainArrLen: domainArr.length
         });
       }

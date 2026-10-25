@@ -1,4 +1,5 @@
 export const DEBUG_DOMAIN_TO_FIND: string | null = null; // example.com | null
+// Other useful tools: https://oisd.nl/excludes/[domain] for checking if the domain is included in common block lists
 
 type HostsSource = [main: string, mirrors: string[] | null, includeAllSubDomain: boolean, allowEmptyRemote?: boolean];
 
@@ -9,18 +10,17 @@ export const HOSTS: HostsSource[] = [
   //   ['https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt'],
   //   true
   // ],
-  [
-    'https://cdn.jsdelivr.net/gh/jerryn70/GoodbyeAds@master/Extension/GoodbyeAds-Xiaomi-Extension.txt',
-    ['https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Extension/GoodbyeAds-Xiaomi-Extension.txt'],
-    false
-  ]
 ];
 
 export const HOSTS_EXTRA: HostsSource[] = [
   // This stupid hosts blocks t.co, so we determine that this is also bullshit, so it is extra
+  // pgl.yoyo.org is also the slowest origin in the whole build, prefer mirrors
   [
-    'https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext',
-    ['https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/thirdparties/pgl.yoyo.org/as/serverlist'],
+    'https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/thirdparties/pgl.yoyo.org/as/serverlist',
+    [
+      'https://proxy.cdn.skk.moe/https/pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext',
+      'https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext'
+    ],
     true
   ],
   // Dan Pollock's hosts file, 0.0.0.0 version is 30 KiB smaller
@@ -47,20 +47,6 @@ export const HOSTS_EXTRA: HostsSource[] = [
     'https://cdn.jsdelivr.net/gh/hoshsadiq/adblock-nocoin-list@master/hosts.txt',
     ['https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt'],
     true
-  ],
-  // GoodbyeAds - Huawei AdBlock, most of its content has been covered by reject.conf, the rest should belongs to reject_extra now
-  [
-    'https://cdn.jsdelivr.net/gh/jerryn70/GoodbyeAds@master/Extension/GoodbyeAds-Huawei-AdBlock.txt',
-    ['https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Extension/GoodbyeAds-Huawei-AdBlock.txt'],
-    false
-  ],
-  // GoodbyeAds - Samsung AdBlock
-  // most of its content has covered by reject.conf. Remaining domains, some are not even owned by samsung, some are normal API/SSO/DNS
-  // blocking them doesn't make sense, yet will not breaking anything anyway, so we move it to extra
-  [
-    'https://cdn.jsdelivr.net/gh/jerryn70/GoodbyeAds@master/Extension/GoodbyeAds-Samsung-AdBlock.txt',
-    ['https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Extension/GoodbyeAds-Samsung-AdBlock.txt'],
-    false
   ]
 ];
 
@@ -68,11 +54,6 @@ export const DOMAIN_LISTS: HostsSource[] = [
   // CoinBlockerList
   // The CoinBlockerList is no longer maintained and even close-source, so we no longer trust it
   // instead we maintain a list of our own
-  // [
-  //   'https://zerodot1.gitlab.io/CoinBlockerLists/list_browser.txt',
-  //   [],
-  //   true,
-  // ]
 ];
 
 export const DOMAIN_LISTS_EXTRA: HostsSource[] = [
@@ -87,8 +68,6 @@ export const DOMAIN_LISTS_EXTRA: HostsSource[] = [
   //   ['https://paulgb.github.io/BarbBlock/blacklists/domain-list.txt'],
   //   true
   // ],
-  // DigitalSide Threat-Intel - OSINT Hub -- Dead, server offline
-  // ['https://osint.digitalside.it/Threat-Intel/lists/latestdomains.txt', [], true],
   // AdGuard CNAME Filter Combined
   // Update on a 7 days basis, so we can also use jsDelivr as primary URL
   [
@@ -257,7 +236,7 @@ export const ADGUARD_FILTERS: AdGuardFilterSource[] = [
     [
       'https://ublockorigin.github.io/uAssetsCDN/filters/unbreak.min.txt'
     ]
-  ]
+  ],
   //
   // Stalkerware
   // [
@@ -266,6 +245,16 @@ export const ADGUARD_FILTERS: AdGuardFilterSource[] = [
   //     'https://adguardteam.github.io/HostlistsRegistry/assets/filter_31.txt'
   //   ]
   // ]
+  //
+  // CJX Annoyance List
+  [
+    // some times 3 update in a month, some times 3 months without update
+    // let's prefer GitHub raw as primary while jsDelivr as fallback
+    'https://raw.githubusercontent.com/cjx82630/cjxlist/master/cjx-annoyance.txt',
+    [
+      'https://cdn.jsdelivr.net/gh/cjx82630/cjxlist@master/cjx-annoyance.txt'
+    ]
+  ]
 ];
 
 export const ADGUARD_FILTERS_WHITELIST: AdGuardFilterSource[] = [
@@ -491,8 +480,6 @@ export const PREDEFINED_WHITELIST = [
   '.sb-cd.com', // AdGuard
   '.storage.yandexcloud.net', // phishing list
   '.login.microsoftonline.com', // phishing list
-  'api.xiaomi.com', // https://github.com/jerryn70/GoodbyeAds/issues/281
-  'api.io.mi.com', // https://github.com/jerryn70/GoodbyeAds/issues/281
   '.cdn.userreport.com', // https://github.com/AdguardTeam/AdGuardSDNSFilter/issues/1158
   '.ip-api.com',
   '.fastly-analytics.com',
@@ -506,9 +493,6 @@ export const PREDEFINED_WHITELIST = [
   '.clicks.mlsend.com', // Fuck Peter Lowe Hosts
   'email.accounts.bitly.com', // Fuck Peter Lowe Hosts
   'adsense.google.com', // Fuck Peter Lowe Hosts
-  'api.vip.miui.com', // Fuck Goodbye Xiaomi Ads
-  'api.comm.miui.com', // Xiaomi MIUI phone number database update URL
-  '.ai.api.xiaomi.com', // Fuck Goodbye Xiaomi Ads
   'm.stripe.com', // EasyPrivacy only blocks m.stripe.com wwith $third-party,
   // yet stupid AdGuardDNSFilter blocks all of it. Stupid AdGuard
   '.w3s.link', // stupid phishing.army, introduce both "*.ipfs.w3s.link" and ".w3s.link" to the block list
@@ -568,6 +552,12 @@ export const PREDEFINED_WHITELIST = [
   'hbbtv.prosieben.de',
   'hbbtv.redbutton.de',
   'hbbtv.kika.de'
+];
+
+export const ENFORCED_BLACKLIST_FROM_WHITELIST: string[] = [
+  // https://adguardteam.github.io/AdGuardSDNSFilter/Filters/exclusions.txt exclude entire ipinfo.io, not good
+  // we want to block a.ipinfo.io, pixel.ipinfo.io, and v.ipinfo.io
+  '.ipinfo.io'
 ];
 
 export const BOGUS_NXDOMAIN_DNSMASQ = [

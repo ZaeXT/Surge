@@ -1,14 +1,14 @@
-import { task } from './trace';
+import { SpanCategory, task } from './trace';
 import { SHARED_DESCRIPTION } from './constants/description';
 import { RulesetOutput } from './lib/rules/ruleset';
 import { RULES, PROBE_DOMAINS, DOMAINS, DOMAIN_SUFFIXES, BLACKLIST } from './constants/microsoft-cdn';
-import { HostnameSmolTrie } from './lib/trie';
+import { HostnameSmolTrie } from 'hntrie/smol';
 import { fetchRemoteTextByLine } from './lib/fetch-text-by-line';
 import { appendArrayInPlace } from 'foxts/append-array-in-place';
 import { extractDomainsFromFelixDnsmasq } from './lib/parse-dnsmasq';
 
 export const buildMicrosoftCdn = task(require.main === module, __filename)(async (span) => {
-  const [domains, domainSuffixes] = await span.traceChildAsync('get microsoft cdn domains', async () => {
+  const [domains, domainSuffixes] = await span.traceChild('get microsoft cdn domains', SpanCategory.Network).traceAsyncFn(async () => {
     const trie = new HostnameSmolTrie();
 
     for await (const line of await fetchRemoteTextByLine('https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/accelerated-domains.china.conf')) {
