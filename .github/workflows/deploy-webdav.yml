@@ -1,4 +1,4 @@
-name: Deploy to WebDAV
+name: Sync, Build and Deploy to WebDAV
 on:
   push:
     branches:
@@ -8,19 +8,75 @@ on:
     - cron: '0 5 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  sync_upstream:
+    name: Sync upstream with a signed merge
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      sha: ${{ steps.sync.outputs.sha }}
+    steps:
+      - name: Check sync credentials
+        env:
+          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SYNC_TOKEN" || { echo 'UPSTREAM_SYNC_TOKEN is required' >&2; exit 1; }
+          test -n "$GPG_PRIVATE_KEY" || { echo 'GPG_PRIVATE_KEY is required' >&2; exit 1; }
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+      - name: Import commit signing key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+      - name: Merge and push upstream
+        id: sync
+        run: |
+          set -euo pipefail
+          git fetch --no-tags https://github.com/SukkaW/Surge.git master
+          upstream_sha=$(git rev-parse FETCH_HEAD)
+          if ! git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            # Keep this fork's CI configuration while merging upstream source changes.
+            if ! git merge --no-ff --no-commit "$upstream_sha"; then
+              test -n "$(git diff --name-only --diff-filter=U)" || exit 1
+            fi
+            git restore --source=HEAD --staged --worktree -- .github/workflows
+            if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+              echo 'Upstream source conflicts require manual resolution:' >&2
+              git diff --name-only --diff-filter=U >&2
+              exit 1
+            fi
+            git commit -S -m 'chore: sync SukkaW/Surge [skip ci]'
+            git verify-commit HEAD
+            git push origin HEAD:master
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build
+    needs: sync_upstream
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-24.04-arm
 
     steps:
       - uses: smorimoto/tune-github-hosted-runner-network@v1
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.sync_upstream.outputs.sha || github.sha }}
           persist-credentials: false
       - uses: pnpm/action-setup@v5
         with:
@@ -79,14 +135,10 @@ jobs:
             ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-
             ${{ runner.os }}-v3-
       - run: pnpm install
-      - name: Install sing-box
-        run: |
-          SINGBOX_VER="1.13.11"
-          curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-arm64.tar.gz" -o /tmp/sing-box.tar.gz
-          tar -xzf /tmp/sing-box.tar.gz -C /tmp
-          sudo mv "/tmp/sing-box-${SINGBOX_VER}-linux-arm64/sing-box" /usr/local/bin/sing-box
-          chmod +x /usr/local/bin/sing-box
-          sing-box version
+      - name: Install latest stable sing-box
+        uses: ./.github/actions/setup-sing-box
+      - name: Test SRS compilation
+        run: pnpm run test Build/build-singbox-srs.test.ts
       - run: pnpm run build
         env:
           PUBLIC_DIR: ${{ steps.ramdisk.outputs.build_dir }}
@@ -122,7 +174,7 @@ jobs:
           key: ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:${{ steps.date.outputs.minute }}:${{ steps.date.outputs.second }}
 
   diff_deployment_on_pr:
-    if: github.ref != 'refs/heads/master'
+    if: ${{ !cancelled() && !failure() && needs.build.result == 'success' && github.ref != 'refs/heads/master' }}
     needs:
       - build
     name: Diff output
@@ -145,7 +197,7 @@ jobs:
     needs:
       - build
     name: Deploy to WebDAV
-    if: github.ref == 'refs/heads/master'
+    if: ${{ !cancelled() && !failure() && needs.build.result == 'success' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-slim
     steps:
       - uses: actions/download-artifact@v8
@@ -153,11 +205,18 @@ jobs:
           name: build-artifact-${{ github.sha }}-${{ github.run_number }}
           path: public
       - name: Upload to WebDAV
+        shell: bash
+        env:
+          WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
+          WEBDAV_USERNAME: ${{ secrets.WEBDAV_USERNAME }}
+          WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
+          WEBDAV_PREFIX: ${{ vars.WEBDAV_PREFIX || secrets.WEBDAV_PREFIX || 'ruleset' }}
         run: |
-          set -e
-          WEBDAV_URL="${{ secrets.WEBDAV_URL }}"
+          set -euo pipefail
+          : "${WEBDAV_URL:?WEBDAV_URL is required}"
+          : "${WEBDAV_USERNAME:?WEBDAV_USERNAME is required}"
+          : "${WEBDAV_PASSWORD:?WEBDAV_PASSWORD is required}"
           WEBDAV_URL="${WEBDAV_URL%/}"
-          WEBDAV_PREFIX="${{ vars.WEBDAV_PREFIX || secrets.WEBDAV_PREFIX || 'ruleset' }}"
           WEBDAV_PREFIX="${WEBDAV_PREFIX%/}"
 
           cd public
@@ -169,31 +228,37 @@ jobs:
             else
               target_url="${WEBDAV_URL}/${WEBDAV_PREFIX}/${dir#./}"
             fi
-            echo "MKCOL $target_url"
-            curl -sSf -X MKCOL -u "${{ secrets.WEBDAV_USERNAME }}:${{ secrets.WEBDAV_PASSWORD }}" "$target_url" || true
+            status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              -X MKCOL --user "$WEBDAV_USERNAME:$WEBDAV_PASSWORD" "$target_url")
+            case "$status" in
+              201|405) ;;
+              *) echo "MKCOL failed for $dir (HTTP $status)" >&2; exit 1 ;;
+            esac
           done < <(find . -type d | sort)
 
           # Upload files
           while IFS= read -r file; do
             rel="${file#./}"
             target_url="${WEBDAV_URL}/${WEBDAV_PREFIX}/${rel}"
-            echo "PUT $target_url"
-            curl -sSf -T "$file" -u "${{ secrets.WEBDAV_USERNAME }}:${{ secrets.WEBDAV_PASSWORD }}" "$target_url"
+            echo "PUT $rel"
+            status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              -T "$file" --user "$WEBDAV_USERNAME:$WEBDAV_PASSWORD" "$target_url")
+            case "$status" in
+              200|201|204) ;;
+              *) echo "PUT failed for $rel (HTTP $status)" >&2; exit 1 ;;
+            esac
           done < <(find . -type f | sort)
 
           echo "WebDAV upload complete"
-      - name: Purge old files not in current build
-        continue-on-error: true
-        run: |
-          echo "Not implemented: stale file cleanup"
-          echo "Consider using a WebDAV client with sync/delete capability if needed."
 
   remove_artifacts:
     needs:
       - deploy_to_webdav
     name: Remove Artifacts after Deployment
-    if: always()
+    if: ${{ !cancelled() && needs.deploy_to_webdav.result == 'success' }}
     runs-on: ubuntu-slim
+    permissions:
+      actions: write
     steps:
       - uses: geekyeggo/delete-artifact@v6
         with:

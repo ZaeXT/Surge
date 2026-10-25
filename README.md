@@ -21,6 +21,29 @@
 - https://github.com/SukkaLab/ruleset.skk.moe
 - https://gitlab.com/SukkaW/ruleset.skk.moe
 
+## Fork 自动同步与 WebDAV 部署
+
+本仓库的 `Sync, Build and Deploy to WebDAV` workflow 每天在 UTC 05:00（北京时间 13:00）运行，也可以通过 `workflow_dispatch` 手动运行。定时和手动运行仅在 `master` 分支同步 `SukkaW/Surge` 的 `master`：保留本仓库的 `.github/workflows/` 配置，其余文件正常合并；源码冲突会使流程失败，需要手动解决。上游没有新提交时仍会重新构建，以更新外部规则源。
+
+同步产生的合并提交使用 GPG 签名并在推送前验证签名。提交消息包含 `[skip ci]`，避免同步推送重复触发构建；当前运行会继续检出同步后的提交、构建规则并部署。上游原有提交保持原始签名和历史，不会重新签名。直接推送 `master` 时构建并部署，PR 只构建和比较产物，不访问同步或 DAV 凭据。
+
+请在仓库的 Actions Secrets 中配置：
+
+| Secret | 用途 |
+| --- | --- |
+| `UPSTREAM_SYNC_TOKEN` | 可向本仓库推送的 PAT。Fine-grained PAT 需要本仓库的 Contents 和 Workflows 读写权限；Classic PAT 需要 `public_repo`（私有仓库为 `repo`）及 `workflow`。同步可能包含 workflow 文件，不能仅依赖默认 `GITHUB_TOKEN`。 |
+| `GPG_PRIVATE_KEY` | ASCII armored 格式的提交签名私钥，或其 Base64 编码。提交身份默认使用密钥中的姓名和邮箱。对应公钥需添加至该 GitHub 账号，邮箱需在账号中验证，才能显示 Verified。 |
+| `GPG_PASSPHRASE` | 私钥口令；无口令密钥可不设置。 |
+| `WEBDAV_URL` | WebDAV 根地址。 |
+| `WEBDAV_USERNAME` | WebDAV 用户名。 |
+| `WEBDAV_PASSWORD` | WebDAV 密码。 |
+
+`WEBDAV_PREFIX` 可设置为 Actions Variable 或 Secret，Variable 优先，默认 `ruleset`。请先在 fork 的 Actions 页面启用 workflows，并确保分支规则允许同步账号推送签名合并提交。
+
+构建时通过 [GitHub latest release API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release) 获取 sing-box 最新正式版，排除 draft 和 prerelease，并校验发布包 SHA-256；下载失败不会回退到旧版本。JSON 规则会编译到 `sing-box/srs/`，保留 `domainset/`、`non_ip/`、`ip/` 子目录，文件后缀为 `.srs`。编译器缺失、没有 JSON 输入或任一编译失败都会阻止部署。
+
+例如 `sing-box/domainset/reject.json` 对应 DAV 上的 `<WEBDAV_URL>/<WEBDAV_PREFIX>/sing-box/srs/domainset/reject.srs`，sing-box 配置使用 `format: "binary"`。DAV 上传包含完整构建目录；MKCOL 只接受创建成功或目录已存在，上传失败会使流程失败。当前不会删除 DAV 上已不再生成的历史文件。
+
 ## 规则组列表
 
 - **Surge (Mac/iOS/tvOS)**，Surge 对所有类型的规则都有不同程度的优化

@@ -1,21 +1,25 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { OUTPUT_SINGBOX_DIR } from './constants/dir';
 
 const SRS_OUTPUT_DIR = path.join(OUTPUT_SINGBOX_DIR, 'srs');
+const execFileAsync = promisify(execFile);
 
 export async function buildSingboxSrs(): Promise<void> {
-  const singboxBin = findSingbox();
-  if (!singboxBin) {
-    console.warn('[build-srs] sing-box not found, skipping SRS compilation');
-    return;
-  }
-
-  console.log(`[build-srs] Using sing-box: ${singboxBin}`);
+  // A successful build must include SRS output; a missing compiler is an error.
+  const { stdout } = await execFileAsync('sing-box', ['version']);
+  console.log(stdout.trim());
 
   const jsonFiles = walkJsonFiles(OUTPUT_SINGBOX_DIR);
   console.log(`[build-srs] Found ${jsonFiles.length} JSON files to compile`);
+  if (jsonFiles.length === 0) {
+    throw new Error('[build-srs] No sing-box JSON rule sets found');
+  }
+
+  // Previous builds may contain rule sets that no longer exist in the source.
+  fs.rmSync(SRS_OUTPUT_DIR, { recursive: true, force: true });
 
   let successCount = 0;
   let failCount = 0;
@@ -30,29 +34,18 @@ export async function buildSingboxSrs(): Promise<void> {
     }
 
     try {
-      execFileSync(singboxBin, ['rule-set', 'compile', jsonFile, '-o', srsFile], {
-        stdio: 'pipe'
-      });
+      // eslint-disable-next-line no-await-in-loop -- bound compiler memory usage for large rule sets
+      await execFileAsync('sing-box', ['rule-set', 'compile', jsonFile, '-o', srsFile]);
       successCount++;
     } catch (e: unknown) {
       failCount++;
-      const stderr = (e as { stderr?: Buffer }).stderr;
-      console.error(`[build-srs] Failed to compile ${relPath}:`, stderr ? stderr.toString().trim() : e);
+      console.error(`[build-srs] Failed to compile ${relPath}:`, e);
     }
   }
 
   console.log(`[build-srs] Compiled ${successCount} SRS files (${failCount} failed)`);
   if (failCount > 0) {
     throw new Error(`[build-srs] ${failCount} SRS compilation(s) failed`);
-  }
-}
-
-function findSingbox(): string | null {
-  try {
-    const binPath = execFileSync('which', ['sing-box'], { stdio: 'pipe' }).toString().trim();
-    return binPath || null;
-  } catch {
-    return null;
   }
 }
 
