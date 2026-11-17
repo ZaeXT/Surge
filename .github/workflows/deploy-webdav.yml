@@ -54,6 +54,8 @@ jobs:
             if ! git merge --no-ff --no-commit "$upstream_sha"; then
               test -n "$(git diff --name-only --diff-filter=U)" || exit 1
             fi
+            # Clear unmerged entries, including workflows deleted by this fork.
+            git rm -r -f -- .github/workflows
             git restore --source=HEAD --staged --worktree -- .github/workflows
             if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
               echo 'Upstream source conflicts require manual resolution:' >&2
